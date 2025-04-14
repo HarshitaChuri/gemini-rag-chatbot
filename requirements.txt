@@ -1,8 +1,9 @@
-streamlit
-langchain
-langchain-google-genai
-langchain_community
-pdfplumber
-chromadb
+langchain 
+langchain-google-genai 
+langchain_community 
+pypdf 
+chromadb 
 sentence-transformers
-google-generativeai
+google-generativeai 
+pdfplumber
+streamlit
