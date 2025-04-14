@@ -3,7 +3,8 @@ langchain-google-genai
 langchain-community
 google-generativeai
 pdfplumber
-chromadb
-sentence-transformers
 streamlit
 pypdf
+faiss-cpu
+sentence-transformers
+docarray
