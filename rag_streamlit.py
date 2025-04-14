@@ -9,10 +9,13 @@ from backend import (
     init_embedding_model,
     store_embeddings,
     get_context_from_chunks,
-    query_with_full_context
+    query_with_full_context,
+    check_versions
 )
 
-os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+# Set API key from streamlit secrets if available
+if "GOOGLE_API_KEY" in st.secrets:
+    os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
 
 st.set_page_config(page_title="RAG Chatbot with Gemini", page_icon="📚", layout="wide")
 
@@ -26,11 +29,21 @@ if "processed_files" not in st.session_state:
     st.session_state.processed_files = []
 
 def main():
+    # Display versions at startup
+    version_info = check_versions()
+    
     with st.sidebar:
         st.title("RAG Chatbot")
         st.subheader("Configuration")
-        api_key = st.text_input("Enter Gemini API Key:", type="password")
+        
+        # Display version information in an expander
+        with st.expander("Library Versions"):
+            for lib, version in version_info.items():
+                st.write(f"{lib}: {version}")
+        
+        api_key = st.text_input("Enter Gemini API Key:", type="password", value=os.environ.get("GOOGLE_API_KEY", ""))
         if api_key and st.button("Set API Key"):
+            os.environ["GOOGLE_API_KEY"] = api_key
             setup_api_key(api_key)
             st.success("API Key set successfully!")
 
@@ -70,6 +83,7 @@ def process_documents(uploaded_files):
     try:
         progress_bar = st.sidebar.progress(0)
         status_text = st.sidebar.empty()
+        debug_info = st.sidebar.expander("Debug Info")
 
         if st.session_state.embedding_model is None:
             status_text.text("Initializing embedding model...")
@@ -99,17 +113,24 @@ def process_documents(uploaded_files):
             if not text:
                 st.sidebar.warning(f"Failed to extract text from {uploaded_file.name}")
                 continue
+            
+            debug_info.write(f"Extracted {len(text)} characters from {uploaded_file.name}")
 
             chunks = create_document_chunks(text)
             if not chunks:
                 st.sidebar.warning(f"Failed to create chunks from {uploaded_file.name}")
                 continue
+            
+            debug_info.write(f"Created {len(chunks)} chunks from {uploaded_file.name}")
 
             for chunk in chunks:
-                all_chunks.append({
-                    "content": chunk,
-                    "source": uploaded_file.name
-                })
+                if chunk and len(chunk.strip()) > 0:
+                    all_chunks.append({
+                        "content": chunk,
+                        "source": uploaded_file.name
+                    })
+                else:
+                    debug_info.write(f"Skipping empty chunk from {uploaded_file.name}")
 
             processed_file_names.append(uploaded_file.name)
             os.unlink(pdf_path)
@@ -121,12 +142,25 @@ def process_documents(uploaded_files):
             texts = [chunk["content"] for chunk in all_chunks]
             metadatas = [{"source": chunk["source"]} for chunk in all_chunks]
 
-            st.sidebar.write("Embedding", len(texts), "chunks...")
+            debug_info.write(f"Preparing to embed {len(texts)} chunks...")
+            
+            # Validate chunks before embedding
+            valid_texts = []
+            valid_metadatas = []
+            for i, text in enumerate(texts):
+                if text and len(text.strip()) > 0:
+                    valid_texts.append(text)
+                    valid_metadatas.append(metadatas[i])
+                else:
+                    debug_info.write(f"Skipping empty chunk from {metadatas[i]['source']}")
+            
+            debug_info.write(f"Embedding {len(valid_texts)} valid chunks...")
+            st.sidebar.write(f"Embedding {len(valid_texts)} chunks...")
 
             vectorstore = store_embeddings(
                 st.session_state.embedding_model,
-                texts,
-                metadatas=metadatas
+                valid_texts,
+                metadatas=valid_metadatas
             )
 
             if vectorstore:
@@ -135,6 +169,7 @@ def process_documents(uploaded_files):
                 st.sidebar.success("Documents processed!")
             else:
                 st.sidebar.error("❌ Failed to create vector database")
+                debug_info.write("Check the logs for more details about the failure")
         else:
             st.sidebar.error("No valid chunks extracted.")
 
@@ -142,7 +177,10 @@ def process_documents(uploaded_files):
         status_text.empty()
 
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
         st.sidebar.error(f"Error processing documents: {str(e)}")
+        st.sidebar.expander("Error Details").code(error_details)
 
 def handle_user_query(query):
     if st.session_state.vectorstore is None:
@@ -169,10 +207,13 @@ def handle_user_query(query):
         display_chat()
 
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
         thinking_placeholder.empty()
         error_msg = f"Error generating response: {str(e)}"
         st.session_state.conversation.append({"role": "assistant", "content": error_msg})
         display_chat()
+        st.expander("Error Details").code(error_details)
 
 def display_chat():
     for message in st.session_state.conversation:
