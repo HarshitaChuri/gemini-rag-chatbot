@@ -9,21 +9,49 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import Chroma
 from langchain.schema import Document
+import traceback
 
 # ----------------------------------------
 # Setup and Configuration
 # ----------------------------------------
 
+def check_versions():
+    """Return version information for key libraries"""
+    try:
+        import langchain
+        import chromadb
+        import google.generativeai as genai
+        import pdfplumber
+        import streamlit as st
+        
+        versions = {
+            "langchain": getattr(langchain, "__version__", "unknown"),
+            "chromadb": getattr(chromadb, "__version__", "unknown"),
+            "google-generativeai": getattr(genai, "__version__", "unknown"),
+            "pdfplumber": getattr(pdfplumber, "__version__", "unknown"),
+            "streamlit": getattr(st, "__version__", "unknown"),
+        }
+        return versions
+    except Exception as e:
+        print(f"Error checking versions: {e}")
+        return {"error": str(e)}
+
 def setup_api_key(api_key: str) -> None:
-    os.environ["GOOGLE_API_KEY"] = api_key
-    genai.configure(api_key=api_key)
-    print("API key configured successfully")
+    """Set up the Google API key for Gemini"""
+    try:
+        os.environ["GOOGLE_API_KEY"] = api_key
+        genai.configure(api_key=api_key)
+        print("API key configured successfully")
+    except Exception as e:
+        print(f"Error configuring API key: {e}")
+        raise
 
 # ----------------------------------------
 # Section 1: Uploading PDF
 # ----------------------------------------
 
 def upload_pdf(pdf_path: str) -> Optional[str]:
+    """Upload a PDF file and return its path if valid"""
     try:
         if os.path.exists(pdf_path):
             print(f"PDF file found at: {pdf_path}")
@@ -40,6 +68,7 @@ def upload_pdf(pdf_path: str) -> Optional[str]:
 # ----------------------------------------
 
 def parse_pdf(pdf_path: str) -> Optional[str]:
+    """Parse a PDF file and extract its text content"""
     try:
         text = ""
         with pdfplumber.open(pdf_path) as pdf:
@@ -51,6 +80,7 @@ def parse_pdf(pdf_path: str) -> Optional[str]:
         return text
     except Exception as e:
         print(f"Error parsing PDF: {e}")
+        traceback.print_exc()
         return None
 
 # ----------------------------------------
@@ -58,6 +88,7 @@ def parse_pdf(pdf_path: str) -> Optional[str]:
 # ----------------------------------------
 
 def create_document_chunks(text: str, chunk_size: int = 1000, chunk_overlap: int = 200) -> List[str]:
+    """Split text into overlapping chunks for processing"""
     try:
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
@@ -70,6 +101,7 @@ def create_document_chunks(text: str, chunk_size: int = 1000, chunk_overlap: int
         return chunks
     except Exception as e:
         print(f"Error creating document chunks: {e}")
+        traceback.print_exc()
         return []
 
 # ----------------------------------------
@@ -77,12 +109,23 @@ def create_document_chunks(text: str, chunk_size: int = 1000, chunk_overlap: int
 # ----------------------------------------
 
 def init_embedding_model(model_name: str = "models/text-embedding-004") -> Optional[GoogleGenerativeAIEmbeddings]:
+    """Initialize the Google Generative AI embeddings model"""
     try:
+        # Check if API key is set
+        api_key = os.environ.get("GOOGLE_API_KEY")
+        if not api_key:
+            print("Warning: GOOGLE_API_KEY environment variable not set")
+            return None
+            
         embedding_model = GoogleGenerativeAIEmbeddings(model=model_name)
-        print("Embedding model initialized successfully")
+        
+        # Test the embedding model with a simple input
+        test_embedding = embedding_model.embed_query("Test query to verify embedding model works")
+        print(f"Embedding model initialized successfully. Test embedding size: {len(test_embedding)}")
         return embedding_model
     except Exception as e:
         print(f"Error initializing embedding model: {e}")
+        traceback.print_exc()
         return None
 
 # ----------------------------------------
@@ -94,17 +137,45 @@ def store_embeddings(
     text_chunks: List[str],
     metadatas: Optional[List[Dict[str, str]]] = None
 ) -> Optional[Chroma]:
+    """Store document embeddings in a ChromaDB vector database"""
     try:
-        documents = [Document(page_content=txt, metadata=meta)
-                     for txt, meta in zip(text_chunks, metadatas)]
+        # Check for empty input
+        if not text_chunks or len(text_chunks) == 0:
+            print("Error: No text chunks provided to store_embeddings")
+            return None
+            
+        if not metadatas or len(metadatas) == 0:
+            print("Error: No metadata provided to store_embeddings")
+            return None
+            
+        # Create Document objects
+        documents = []
+        for i, (txt, meta) in enumerate(zip(text_chunks, metadatas)):
+            if txt and len(txt.strip()) > 0:
+                documents.append(Document(page_content=txt, metadata=meta))
+            else:
+                print(f"Warning: Skipping empty document at index {i}")
+                
+        if not documents:
+            print("Error: No valid documents to embed")
+            return None
+            
+        print(f"Creating Chroma database with {len(documents)} documents")
+        
+        # Create in-memory Chroma vectorstore
         vectorstore = Chroma.from_documents(
             documents=documents,
-            embedding=embedding_model
+            embedding=embedding_model,
+            persist_directory=None  # Use in-memory database for Streamlit Cloud
         )
-        print(f"Successfully stored {len(documents)} documents in ChromaDB")
+        
+        # Verify the vector store was created successfully
+        collection_count = len(vectorstore.get())
+        print(f"Successfully stored {collection_count} documents in ChromaDB")
         return vectorstore
     except Exception as e:
         print(f"Error storing embeddings: {e}")
+        traceback.print_exc()
         return None
 
 # ----------------------------------------
@@ -112,12 +183,18 @@ def store_embeddings(
 # ----------------------------------------
 
 def get_context_from_chunks(relevant_chunks, splitter="\n\n---\n\n"):
-    chunk_contents = []
-    for i, chunk in enumerate(relevant_chunks):
-        if hasattr(chunk, 'page_content'):
-            chunk_text = f"[Chunk {i+1}]: {chunk.page_content}"
-            chunk_contents.append(chunk_text)
-    return splitter.join(chunk_contents)
+    """Format retrieved chunks for context generation"""
+    try:
+        chunk_contents = []
+        for i, chunk in enumerate(relevant_chunks):
+            if hasattr(chunk, 'page_content'):
+                source = chunk.metadata.get('source', 'Unknown') if hasattr(chunk, 'metadata') else 'Unknown'
+                chunk_text = f"[Chunk {i+1} from {source}]: {chunk.page_content}"
+                chunk_contents.append(chunk_text)
+        return splitter.join(chunk_contents)
+    except Exception as e:
+        print(f"Error getting context from chunks: {e}")
+        return f"Error retrieving context: {str(e)}"
 
 # ----------------------------------------
 # Section 8: Generating Responses with Gemini
@@ -130,11 +207,22 @@ def query_with_full_context(
     k: int = 3,
     temperature: float = 0.3
 ) -> Tuple[str, str, List[Any]]:
+    """Query the Gemini model with context from the vector database"""
     try:
+        # Get relevant documents from the vector store
         retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": k})
         relevant_chunks = retriever.get_relevant_documents(query)
+        
+        print(f"Retrieved {len(relevant_chunks)} relevant chunks for query: {query}")
+        
+        # Get formatted context
         context = get_context_from_chunks(relevant_chunks)
-
+        
+        # Check if we have any context
+        if not context or context.strip() == "":
+            return "I couldn't find any relevant information in the provided documents.", "", []
+            
+        # Create prompt with context and query
         prompt = f"""You are a helpful AI assistant answering questions based on provided context.
 
 Use ONLY the following context to answer the question. 
@@ -147,14 +235,19 @@ Question: {query}
 
 Answer:"""
 
+        # Initialize Gemini model with appropriate settings
         llm = ChatGoogleGenerativeAI(
             model=model_name,
             temperature=temperature,
             top_p=0.95,
             max_output_tokens=1024
         )
+        
+        # Generate response
         response = llm.invoke(prompt)
         return response.content, context, relevant_chunks
+        
     except Exception as e:
         print(f"Error in query_with_full_context: {e}")
+        traceback.print_exc()
         return f"Error generating response: {str(e)}", "", []
