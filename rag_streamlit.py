@@ -32,7 +32,7 @@ os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
 import streamlit as st
 import os
 import tempfile
-from session_4_rag_backend import (
+from backend import (
     setup_api_key,
     upload_pdf,
     parse_pdf,
