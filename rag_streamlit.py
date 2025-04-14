@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import os
 import streamlit as st
 import tempfile
@@ -8,7 +7,6 @@ from backend import (
     parse_pdf,
     create_document_chunks,
     init_embedding_model,
-    embed_documents,
     store_embeddings,
     get_context_from_chunks,
     query_with_full_context
@@ -16,14 +14,8 @@ from backend import (
 
 os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
 
-# Page config
-st.set_page_config(
-    page_title="RAG Chatbot with Gemini",
-    page_icon="📚",
-    layout="wide"
-)
+st.set_page_config(page_title="RAG Chatbot with Gemini", page_icon="📚", layout="wide")
 
-# Session initialization
 if "conversation" not in st.session_state:
     st.session_state.conversation = []
 if "vectorstore" not in st.session_state:
@@ -33,14 +25,11 @@ if "embedding_model" not in st.session_state:
 if "processed_files" not in st.session_state:
     st.session_state.processed_files = []
 
-
 def main():
     with st.sidebar:
         st.title("RAG Chatbot")
         st.subheader("Configuration")
-
         api_key = st.text_input("Enter Gemini API Key:", type="password")
-
         if api_key and st.button("Set API Key"):
             setup_api_key(api_key)
             st.success("API Key set successfully!")
@@ -48,7 +37,6 @@ def main():
         st.divider()
         st.subheader("Upload Documents")
         uploaded_files = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
-
         if uploaded_files and st.button("Process Documents"):
             process_documents(uploaded_files)
 
@@ -63,22 +51,20 @@ def main():
             st.slider("Temperature", 0.0, 1.0, 0.2, 0.1, key="temperature")
 
     st.title("Retrieval Augmented Generation Chatbot")
-
     if st.session_state.vectorstore is None:
         st.info("Please upload and process documents to start chatting.")
         with st.expander("How to use this app"):
             st.markdown("""
-            1. Enter your Gemini API Key in the sidebar  
-            2. Upload one or more PDF documents  
-            3. Click "Process Documents" to analyze them  
-            4. Ask questions about the documents in the chat  
+            1. Enter your Gemini API Key  
+            2. Upload PDF documents  
+            3. Click "Process Documents"  
+            4. Ask questions in the chat!  
             """)
     else:
         display_chat()
         user_query = st.chat_input("Ask a question about your documents...")
         if user_query:
             handle_user_query(user_query)
-
 
 def process_documents(uploaded_files):
     try:
@@ -119,8 +105,12 @@ def process_documents(uploaded_files):
                 st.sidebar.warning(f"Failed to create chunks from {uploaded_file.name}")
                 continue
 
-            chunks_with_metadata = [{"content": chunk, "source": uploaded_file.name} for chunk in chunks]
-            all_chunks.extend(chunks_with_metadata)
+            for chunk in chunks:
+                all_chunks.append({
+                    "content": chunk,
+                    "source": uploaded_file.name
+                })
+
             processed_file_names.append(uploaded_file.name)
             os.unlink(pdf_path)
 
@@ -131,22 +121,20 @@ def process_documents(uploaded_files):
             texts = [chunk["content"] for chunk in all_chunks]
             metadatas = [{"source": chunk["source"]} for chunk in all_chunks]
 
-            persist_dir = tempfile.mkdtemp()
+            st.sidebar.write("Embedding", len(texts), "chunks...")
 
             vectorstore = store_embeddings(
                 st.session_state.embedding_model,
                 texts,
-                persist_directory=persist_dir,
                 metadatas=metadatas
             )
 
             if vectorstore:
                 st.session_state.vectorstore = vectorstore
                 st.session_state.processed_files = processed_file_names
-                status_text.text("Processing complete!")
-                st.sidebar.success(f"Processed {len(processed_file_names)} documents")
+                st.sidebar.success("Documents processed!")
             else:
-                st.sidebar.error("❌ Failed to create vector database.")
+                st.sidebar.error("❌ Failed to create vector database")
         else:
             st.sidebar.error("No valid chunks extracted.")
 
@@ -155,7 +143,6 @@ def process_documents(uploaded_files):
 
     except Exception as e:
         st.sidebar.error(f"Error processing documents: {str(e)}")
-
 
 def handle_user_query(query):
     if st.session_state.vectorstore is None:
@@ -170,7 +157,7 @@ def handle_user_query(query):
         k = st.session_state.k_value
         temperature = st.session_state.temperature
 
-        response, context, chunks = query_with_full_context(
+        response, context, _ = query_with_full_context(
             query,
             st.session_state.vectorstore,
             k=k,
@@ -187,7 +174,6 @@ def handle_user_query(query):
         st.session_state.conversation.append({"role": "assistant", "content": error_msg})
         display_chat()
 
-
 def display_chat():
     for message in st.session_state.conversation:
         with st.chat_message(message["role"]):
@@ -195,7 +181,6 @@ def display_chat():
             if message["role"] == "assistant" and "context" in message and message["context"]:
                 with st.expander("View source context"):
                     st.text(message["context"])
-
 
 if __name__ == "__main__":
     main()
