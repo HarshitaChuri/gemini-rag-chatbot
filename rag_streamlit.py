@@ -9,14 +9,10 @@ from backend import (
     init_embedding_model,
     store_embeddings,
     get_context_from_chunks,
-    query_with_full_context,
-    check_versions
+    query_with_full_context
 )
 
-# Set API key from streamlit secrets if available
-if "GOOGLE_API_KEY" in st.secrets:
-    os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
-
+# Do not set API key by default - users need to add their own
 st.set_page_config(page_title="RAG Chatbot with Gemini", page_icon="📚", layout="wide")
 
 if "conversation" not in st.session_state:
@@ -29,19 +25,12 @@ if "processed_files" not in st.session_state:
     st.session_state.processed_files = []
 
 def main():
-    # Display versions at startup
-    version_info = check_versions()
-    
     with st.sidebar:
         st.title("RAG Chatbot")
         st.subheader("Configuration")
         
-        # Display version information in an expander
-        with st.expander("Library Versions"):
-            for lib, version in version_info.items():
-                st.write(f"{lib}: {version}")
-        
-        api_key = st.text_input("Enter Gemini API Key:", type="password", value=os.environ.get("GOOGLE_API_KEY", ""))
+        # API key input
+        api_key = st.text_input("Enter Gemini API Key:", type="password")
         if api_key and st.button("Set API Key"):
             os.environ["GOOGLE_API_KEY"] = api_key
             setup_api_key(api_key)
@@ -68,7 +57,7 @@ def main():
         st.info("Please upload and process documents to start chatting.")
         with st.expander("How to use this app"):
             st.markdown("""
-            1. Enter your Gemini API Key  
+            1. Enter your Gemini API Key in the sidebar  
             2. Upload PDF documents  
             3. Click "Process Documents"  
             4. Ask questions in the chat!  
@@ -83,7 +72,12 @@ def process_documents(uploaded_files):
     try:
         progress_bar = st.sidebar.progress(0)
         status_text = st.sidebar.empty()
-        debug_info = st.sidebar.expander("Debug Info")
+        debug_info = st.sidebar.empty()
+
+        # Check if API key is set
+        if not os.environ.get("GOOGLE_API_KEY"):
+            st.sidebar.error("Please set your Gemini API Key first.")
+            return
 
         if st.session_state.embedding_model is None:
             status_text.text("Initializing embedding model...")
@@ -113,15 +107,11 @@ def process_documents(uploaded_files):
             if not text:
                 st.sidebar.warning(f"Failed to extract text from {uploaded_file.name}")
                 continue
-            
-            debug_info.write(f"Extracted {len(text)} characters from {uploaded_file.name}")
 
             chunks = create_document_chunks(text)
             if not chunks:
                 st.sidebar.warning(f"Failed to create chunks from {uploaded_file.name}")
                 continue
-            
-            debug_info.write(f"Created {len(chunks)} chunks from {uploaded_file.name}")
 
             for chunk in chunks:
                 if chunk and len(chunk.strip()) > 0:
@@ -129,8 +119,6 @@ def process_documents(uploaded_files):
                         "content": chunk,
                         "source": uploaded_file.name
                     })
-                else:
-                    debug_info.write(f"Skipping empty chunk from {uploaded_file.name}")
 
             processed_file_names.append(uploaded_file.name)
             os.unlink(pdf_path)
@@ -141,35 +129,22 @@ def process_documents(uploaded_files):
         if all_chunks:
             texts = [chunk["content"] for chunk in all_chunks]
             metadatas = [{"source": chunk["source"]} for chunk in all_chunks]
-
-            debug_info.write(f"Preparing to embed {len(texts)} chunks...")
             
-            # Validate chunks before embedding
-            valid_texts = []
-            valid_metadatas = []
-            for i, text in enumerate(texts):
-                if text and len(text.strip()) > 0:
-                    valid_texts.append(text)
-                    valid_metadatas.append(metadatas[i])
-                else:
-                    debug_info.write(f"Skipping empty chunk from {metadatas[i]['source']}")
-            
-            debug_info.write(f"Embedding {len(valid_texts)} valid chunks...")
-            st.sidebar.write(f"Embedding {len(valid_texts)} chunks...")
+            debug_info.text(f"Embedding {len(texts)} chunks...")
 
             vectorstore = store_embeddings(
                 st.session_state.embedding_model,
-                valid_texts,
-                metadatas=valid_metadatas
+                texts,
+                metadatas=metadatas
             )
 
             if vectorstore:
                 st.session_state.vectorstore = vectorstore
                 st.session_state.processed_files = processed_file_names
-                st.sidebar.success("Documents processed!")
+                st.sidebar.success("Documents processed successfully!")
+                debug_info.empty()
             else:
                 st.sidebar.error("❌ Failed to create vector database")
-                debug_info.write("Check the logs for more details about the failure")
         else:
             st.sidebar.error("No valid chunks extracted.")
 
@@ -177,10 +152,7 @@ def process_documents(uploaded_files):
         status_text.empty()
 
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
         st.sidebar.error(f"Error processing documents: {str(e)}")
-        st.sidebar.expander("Error Details").code(error_details)
 
 def handle_user_query(query):
     if st.session_state.vectorstore is None:
@@ -207,13 +179,10 @@ def handle_user_query(query):
         display_chat()
 
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
         thinking_placeholder.empty()
         error_msg = f"Error generating response: {str(e)}"
         st.session_state.conversation.append({"role": "assistant", "content": error_msg})
         display_chat()
-        st.expander("Error Details").code(error_details)
 
 def display_chat():
     for message in st.session_state.conversation:
