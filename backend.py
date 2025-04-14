@@ -7,34 +7,12 @@ import google.generativeai as genai
 from typing import List, Dict, Tuple, Optional, Any
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain_community.vectorstores import Chroma
 from langchain.schema import Document
 import traceback
 
 # ----------------------------------------
 # Setup and Configuration
 # ----------------------------------------
-
-def check_versions():
-    """Return version information for key libraries"""
-    try:
-        import langchain
-        import chromadb
-        import google.generativeai as genai
-        import pdfplumber
-        import streamlit as st
-        
-        versions = {
-            "langchain": getattr(langchain, "__version__", "unknown"),
-            "chromadb": getattr(chromadb, "__version__", "unknown"),
-            "google-generativeai": getattr(genai, "__version__", "unknown"),
-            "pdfplumber": getattr(pdfplumber, "__version__", "unknown"),
-            "streamlit": getattr(st, "__version__", "unknown"),
-        }
-        return versions
-    except Exception as e:
-        print(f"Error checking versions: {e}")
-        return {"error": str(e)}
 
 def setup_api_key(api_key: str) -> None:
     """Set up the Google API key for Gemini"""
@@ -80,7 +58,6 @@ def parse_pdf(pdf_path: str) -> Optional[str]:
         return text
     except Exception as e:
         print(f"Error parsing PDF: {e}")
-        traceback.print_exc()
         return None
 
 # ----------------------------------------
@@ -101,7 +78,6 @@ def create_document_chunks(text: str, chunk_size: int = 1000, chunk_overlap: int
         return chunks
     except Exception as e:
         print(f"Error creating document chunks: {e}")
-        traceback.print_exc()
         return []
 
 # ----------------------------------------
@@ -125,19 +101,18 @@ def init_embedding_model(model_name: str = "models/text-embedding-004") -> Optio
         return embedding_model
     except Exception as e:
         print(f"Error initializing embedding model: {e}")
-        traceback.print_exc()
         return None
 
 # ----------------------------------------
-# Section 5: Storing in Vector Database (ChromaDB)
+# Section 5: Storing in Vector Database
 # ----------------------------------------
 
 def store_embeddings(
     embedding_model: GoogleGenerativeAIEmbeddings,
     text_chunks: List[str],
     metadatas: Optional[List[Dict[str, str]]] = None
-) -> Optional[Chroma]:
-    """Store document embeddings in a ChromaDB vector database"""
+) -> Optional[Any]:
+    """Store document embeddings in a compatible vector database"""
     try:
         # Check for empty input
         if not text_chunks or len(text_chunks) == 0:
@@ -160,19 +135,31 @@ def store_embeddings(
             print("Error: No valid documents to embed")
             return None
             
-        print(f"Creating Chroma database with {len(documents)} documents")
+        print(f"Creating embeddings for {len(documents)} documents")
         
-        # Create in-memory Chroma vectorstore
-        vectorstore = Chroma.from_documents(
-            documents=documents,
-            embedding=embedding_model,
-            persist_directory=None  # Use in-memory database for Streamlit Cloud
-        )
-        
-        # Verify the vector store was created successfully
-        collection_count = len(vectorstore.get())
-        print(f"Successfully stored {collection_count} documents in ChromaDB")
-        return vectorstore
+        # Try to use FAISS
+        try:
+            from langchain_community.vectorstores import FAISS
+            
+            vectorstore = FAISS.from_documents(
+                documents=documents,
+                embedding=embedding_model
+            )
+            print(f"Successfully created FAISS vector store with {len(documents)} documents")
+            return vectorstore
+        except ImportError:
+            print("FAISS not available, falling back to simple vector store")
+            
+            # Simple dictionary-based vector store if FAISS is not available
+            # This is a minimal implementation to avoid SQLite dependency issues
+            from langchain_community.vectorstores import DocArrayInMemorySearch
+            
+            vectorstore = DocArrayInMemorySearch.from_documents(
+                documents=documents,
+                embedding=embedding_model
+            )
+            print(f"Created in-memory vector store with {len(documents)} documents")
+            return vectorstore
     except Exception as e:
         print(f"Error storing embeddings: {e}")
         traceback.print_exc()
@@ -202,7 +189,7 @@ def get_context_from_chunks(relevant_chunks, splitter="\n\n---\n\n"):
 
 def query_with_full_context(
     query: str,
-    vectorstore: Chroma,
+    vectorstore: Any,
     model_name: str = "gemini-2.0-flash-thinking-exp-01-21",
     k: int = 3,
     temperature: float = 0.3
@@ -249,5 +236,4 @@ Answer:"""
         
     except Exception as e:
         print(f"Error in query_with_full_context: {e}")
-        traceback.print_exc()
         return f"Error generating response: {str(e)}", "", []
